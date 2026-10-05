@@ -1,0 +1,314 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  MASTER
+  WORKER
+  MANAGER
+  ADMIN
+}
+
+enum WorkerStatus {
+  FREE
+  BUSY
+  QUEUED
+  OFF_SHIFT
+}
+
+enum Shift {
+  DAY
+  NIGHT
+}
+
+enum OrderType {
+  PLANNED
+  UNPLANNED_EMERGENCY
+}
+
+enum Priority {
+  EMERGENCY
+  HIGH
+  NORMAL
+  PLANNED
+}
+
+enum OrderStatus {
+  CREATED
+  ISSUED
+  ACCEPTED
+  QUEUED
+  IN_PROGRESS
+  PAUSED
+  SUBMITTED
+  REWORK
+  CLOSED
+  CANCELLED
+}
+
+enum Criticality {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum FaultCategory {
+  M // Механика
+  E // Электрика
+  G // Гидравлика/пневматика
+  P // Приборы/автоматика
+  S // Прочее (Слесарные/строительные)
+}
+
+enum PhotoType {
+  BEFORE
+  AFTER
+}
+
+enum Verdict {
+  ACCEPTED
+  ACCEPTED_WITH_NOTES
+  REWORK
+}
+
+enum NotifType {
+  NEW_ORDER
+  REMINDER
+  OVERDUE
+  ESCALATION
+  REWORK
+  CLOSED
+  SHIFT_REPORT
+}
+
+model User {
+  id               String         @id @default(cuid())
+  login            String         @unique
+  pinHash          String
+  fullName         String
+  role             Role
+  specialty        String?
+  rank             Int?
+  brigadeId        String?
+  brigade          Brigade?       @relation(fields: [brigadeId], references: [id])
+  shift            Shift?
+  currentStatus    WorkerStatus   @default(OFF_SHIFT)
+  telegramChatId   String?
+  pushSubscription String?        @db.Text
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  workOrders    WorkOrder[]      @relation("AssignedWorker")
+  masterOrders  WorkOrder[]      @relation("Master")
+  events        OrderEvent[]
+  photos        OrderPhoto[]
+  notifications Notification[]
+  shiftReports  ShiftReport[]
+  ratings       RatingSnapshot[]
+  evaluations   AIEvaluation[]   @relation("Evaluator")
+}
+
+model Brigade {
+  id    String @id @default(cuid())
+  name  String @unique
+  users User[]
+}
+
+model Section {
+  id        String      @id @default(cuid())
+  name      String      @unique
+  equipment Equipment[]
+  orders    WorkOrder[]
+}
+
+model Equipment {
+  id              String      @id @default(cuid())
+  name            String
+  inventoryNumber String      @unique
+  sectionId       String
+  section         Section     @relation(fields: [sectionId], references: [id])
+  type            String
+  criticality     Criticality @default(MEDIUM)
+  orders          WorkOrder[]
+}
+
+model FaultCode {
+  id                     String        @id @default(cuid())
+  code                   String        @unique
+  name                   String
+  category               FaultCategory
+  defaultNormTimeMinutes Int
+  orders                 WorkOrder[]
+}
+
+model Material {
+  id                        String  @id @default(cuid())
+  name                      String
+  unit                      String
+  normalConsumptionPerOrder Int?
+  orderMaterials            OrderMaterial[]
+}
+
+model WorkOrder {
+  id              String      @id @default(cuid())
+  number          String      @unique
+  type            OrderType
+  description     String
+  sectionId       String
+  section         Section     @relation(fields: [sectionId], references: [id])
+  equipmentId     String
+  equipment       Equipment   @relation(fields: [equipmentId], references: [id])
+  assignedUserId  String?
+  assignedUser    User?       @relation("AssignedWorker", fields: [assignedUserId], references: [id])
+  masterUserId    String
+  masterUser      User        @relation("Master", fields: [masterUserId], references: [id])
+  priority        Priority
+  dueAt           DateTime
+  normTimeMinutes Int
+  status          OrderStatus @default(CREATED)
+  isOverdue       Boolean     @default(false)
+  rejectionReason String?
+  pauseReason     String?
+  workDone        String?
+  faultCodeId     String?
+  faultCode       FaultCode?  @relation(fields: [faultCodeId], references: [id])
+  comment         String?
+  issuedAt        DateTime?
+  acceptedAt      DateTime?
+  startedAt       DateTime?
+  pausedAt        DateTime?
+  submittedAt     DateTime?
+  closedAt        DateTime?
+  cancelledAt     DateTime?
+  downtimeMinutes Int?
+  createdAt       DateTime    @default(now())
+  updatedAt       DateTime    @updatedAt
+
+  events        OrderEvent[]
+  photos        OrderPhoto[]
+  materials     OrderMaterial[]
+  evaluations   AIEvaluation[]
+  notifications Notification[]
+
+  @@index([status])
+  @@index([assignedUserId, status])
+  @@index([dueAt])
+}
+
+model OrderEvent {
+  id         String      @id @default(cuid())
+  orderId    String
+  order      WorkOrder   @relation(fields: [orderId], references: [id])
+  userId     String?
+  user       User?       @relation(fields: [userId], references: [id])
+  action     String
+  fromStatus OrderStatus?
+  toStatus   OrderStatus?
+  comment    String?
+  reason     String?
+  createdAt  DateTime    @default(now())
+
+  @@index([orderId])
+}
+
+model OrderPhoto {
+  id              String    @id @default(cuid())
+  orderId         String
+  order           WorkOrder @relation(fields: [orderId], references: [id])
+  type            PhotoType
+  filePath        String
+  originalName    String
+  mimeType        String
+  sizeBytes       Int
+  sha256Hash      String
+  takenAtMetadata DateTime?
+  uploadedAt      DateTime  @default(now())
+  userId          String?
+  user            User?     @relation(fields: [userId], references: [id])
+
+  @@index([orderId])
+  @@index([sha256Hash])
+}
+
+model OrderMaterial {
+  id         String    @id @default(cuid())
+  orderId    String
+  order      WorkOrder @relation(fields: [orderId], references: [id])
+  materialId String
+  material   Material  @relation(fields: [materialId], references: [id])
+  quantity   Float
+
+  @@index([orderId])
+}
+
+model AIEvaluation {
+  id          String    @id @default(cuid())
+  orderId     String
+  order       WorkOrder @relation(fields: [orderId], references: [id])
+  verdict     Verdict
+  score       Int
+  explanation String    @db.Text
+  checksJson  Json
+  modelUsed   String
+  evaluatorId String?
+  evaluator   User?     @relation("Evaluator", fields: [evaluatorId], references: [id])
+  createdAt   DateTime  @default(now())
+
+  @@index([orderId])
+}
+
+model Notification {
+  id        String     @id @default(cuid())
+  userId    String
+  user      User       @relation(fields: [userId], references: [id])
+  orderId   String?
+  order     WorkOrder? @relation(fields: [orderId], references: [id])
+  type      NotifType
+  title     String
+  message   String     @db.Text
+  isRead    Boolean    @default(false)
+  sentAt    DateTime   @default(now())
+  createdAt DateTime   @default(now())
+
+  @@index([userId, isRead])
+}
+
+model ShiftReport {
+  id              String   @id @default(cuid())
+  masterId        String
+  master          User     @relation(fields: [masterId], references: [id])
+  date            DateTime
+  issuedCount     Int
+  completedCount  Int
+  overdueCount    Int
+  rejectedCount   Int
+  downtimeMinutes Int
+  summaryText     String   @db.Text
+  createdAt       DateTime @default(now())
+
+  @@index([masterId, date])
+}
+
+model RatingSnapshot {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+  periodStart       DateTime
+  periodEnd         DateTime
+  averageQualityScore Float
+  onTimeRate        Float
+  reworkRate        Float
+  workloadScore     Float
+  refusalPenalty    Float
+  totalScore        Float
+  explanation       String   @db.Text
+  createdAt         DateTime @default(now())
+
+  @@index([userId])
+}
